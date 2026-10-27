@@ -1,0 +1,177 @@
+openapi: 3.0.3
+info:
+  title: DropMtaani API — endpoints used by the agent
+  version: 2026-10-27
+  description: >
+    Subset of the DropMtaani customer API that the public agent calls.
+    Paths and parameters only; no server internals.
+servers:
+  - url: https://CHANGE-ME
+    description: Set per environment via DROPMTAANI_API_BASE (never commit real hosts).
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/items/search:
+    get:
+      summary: Search products by name
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - $ref: '#/components/parameters/ZoneId'
+        - name: name
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Product list (paginated) }
+
+  /api/v1/items/details/{id}:
+    get:
+      summary: Single product with price, store and variations
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Product details }
+
+  /api/v1/items/popular:
+    get:
+      summary: Popular products
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - $ref: '#/components/parameters/ZoneId'
+      responses:
+        '200': { description: Product list }
+
+  /api/v1/items/discounted:
+    get:
+      summary: Discounted products (deals)
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - $ref: '#/components/parameters/ZoneId'
+      responses:
+        '200': { description: Product list }
+
+  /api/v1/stores/search:
+    get:
+      summary: Search stores by name
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - $ref: '#/components/parameters/ZoneId'
+        - name: name
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Store list }
+
+  /api/v1/categories/:
+    get:
+      summary: Category list
+      parameters:
+        - $ref: '#/components/parameters/ZoneId'
+        - name: search
+          in: query
+          schema: { type: string }
+      responses:
+        '200': { description: Category list }
+
+  /api/v1/customer/cart/list:
+    get:
+      summary: Cart contents for one store
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - name: store_id
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: guest_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200': { description: Cart rows with totals }
+
+  /api/v1/customer/cart/add:
+    post:
+      summary: Add an item to the cart
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [item_id, model, price, quantity, store_id]
+              properties:
+                item_id: { type: integer }
+                model: { type: string, enum: [Item, ItemCampaign] }
+                price: { type: number }
+                quantity: { type: integer, minimum: 1 }
+                store_id: { type: integer }
+                guest_id: { type: string }
+                variation: { type: array, items: {} }
+      responses:
+        '200': { description: Updated cart }
+
+  /api/v1/customer/cart/update:
+    post:
+      summary: Change a cart row quantity
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cart_id, price, quantity, store_id]
+              properties:
+                cart_id: { type: integer }
+                price: { type: number }
+                quantity: { type: integer, minimum: 1 }
+                store_id: { type: integer }
+                guest_id: { type: string }
+      responses:
+        '200': { description: Updated cart }
+
+  /api/v1/customer/cart/remove-item:
+    delete:
+      summary: Remove one cart row
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cart_id, store_id]
+              properties:
+                cart_id: { type: integer }
+                store_id: { type: integer }
+                guest_id: { type: string }
+      responses:
+        '200': { description: Updated cart }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Customer token, else the scoped agent service token.
+  parameters:
+    ModuleId:
+      name: moduleId
+      in: header
+      schema: { type: integer }
+      description: Active shopping module id.
+    ZoneId:
+      name: zoneId
+      in: header
+      schema: { type: string }
+      description: JSON array of zone ids covering the delivery point.
