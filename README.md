@@ -19,7 +19,8 @@ real DropMtaani API and powers the in-app chat.
 ## Built during the hackathon
 
 - [x] Baseline audit of the pre-existing chatbot (`BASELINE.md`, Oct 27)
-- [ ] Agent service scaffold (this layout, config, health endpoint)
+- [x] Agent service scaffold (layout, config, health endpoint)
+- [x] Day-1 provider check (`scripts/check_provider.py`): key works, 9 models enabled, Spark parses Swahili orders
 - [ ] Tool-calling order agent (text + voice, Swahili/Sheng/English)
 - [ ] "What can I cook tonight?" pipeline
 - [ ] "Today's order" predictor
