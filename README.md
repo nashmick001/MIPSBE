@@ -22,6 +22,8 @@ real DropMtaani API and powers the in-app chat.
 - [x] Agent service scaffold (layout, config, health endpoint)
 - [x] Day-1 provider check (`scripts/check_provider.py`): key works, 9 models enabled, Spark parses Swahili orders
 - [x] Parity agent: Meta tool-calling loop, 10 shopping tools over the real API (`openapi.yaml`), `POST /v1/chat` with tool trace, server-side prices only
+- [x] Cross-module agent: search/cart span Food/Grocery/Pharmacy/SHOP, results tagged by section, cart writes go to the item's own section
+- [x] Voice notes: `POST /v1/transcribe` (Voice Transcribe, verified live), website mic button with 16kHz WAV conversion
 - [ ] Tool-calling order agent (text + voice, Swahili/Sheng/English)
 - [ ] "What can I cook tonight?" pipeline
 - [ ] "Today's order" predictor
@@ -62,6 +64,10 @@ Try these (planned):
 See `evals/`. Results to be published here: order accuracy (~50
 Swahili/Sheng orders), fridge ingredient detection, injection attacks
 blocked, latency, cost per order.
+
+- Product glimpse (Oct 27, `evals/product_glimpse.py`, 5/5): junk rejection,
+  size picking, Swahili order grounding, empty-result honesty, cross-module
+  guidance — all on real catalog data.
 
 ## Red team
 
