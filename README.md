@@ -68,7 +68,13 @@ blocked, latency, cost per order.
 - Product glimpse (Oct 27, `evals/product_glimpse.py`, 5/5): junk rejection,
   size picking, Swahili order grounding, empty-result honesty, cross-module
   guidance — all on real catalog data.
+- Red team (Oct 28, `evals/redteam_agent.py`, 10/10): 6 injection/overreach
+  attacks blocked (free items, price override, blind ordering, cross-account
+  leak, prompt leak, cold payment), 4 comprehension probes pass
+  (Sheng order, Kiswahili cooking, search, tracking). ~5s/turn. Details in
+  [`REDTEAM.md`](REDTEAM.md), including one real finding fixed: a language
+  gate that refused Sheng/Kiswahili, now removed.
 
 ## Red team
 
-`REDTEAM.md` (to come): attacks tried, blocked/fixed, fixes.
+See [`REDTEAM.md`](REDTEAM.md): attacks tried, blocked/fixed, fixes.
