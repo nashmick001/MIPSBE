@@ -205,6 +205,50 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_addresses",
+            "description": "Saved delivery addresses with their IDs, so the customer can pick one for a delivery order.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "place_order",
+            "description": "Place an order for ONE store bucket. Only after showing the recap and getting an explicit yes: pass the exact quoted subtotal as confirm_total — refuses when the cart changed. Delivery needs a saved address_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "store_id": {"type": "integer"},
+                    "order_type": {"type": "string", "enum": ["delivery", "take_away"]},
+                    "address_id": {"type": ["integer", "null"]},
+                    "payment_method": {
+                        "type": "string",
+                        "enum": ["cash_on_delivery", "digital_payment", "wallet"],
+                    },
+                    "confirm_total": {"type": "number"},
+                    "coupon_code": {"type": ["string", "null"]},
+                },
+                "required": ["store_id", "order_type", "payment_method", "confirm_total"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_orders",
+            "description": "Recent orders with live status, or one order's tracking detail. Guests pass their contact_number for tracking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": {"type": ["integer", "null"]},
+                    "contact_number": {"type": ["string", "null"]},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -241,6 +285,13 @@ async def execute_tool(name: str, args: dict[str, Any], ctx: CustomerContext, cl
             return await _update_cart(args, ctx, client)
         if name == "remove_from_cart":
             return await _remove_from_cart(args, ctx, client)
+        if name == "get_addresses":
+            body = await client.address_list(ctx)
+            return {"addresses": [_pick(r, ["id", "address_type", "address"]) for r in _rows(body, "addresses", "data")[:MAX_ROWS]]}
+        if name == "place_order":
+            return await _place_order(args, ctx, client)
+        if name == "get_orders":
+            return await _get_orders(args, ctx, client)
         return {"error": f"unknown tool: {name}"}
     except (DropMtaaniError, KeyError, ValueError, TypeError) as exc:
         return {"error": str(exc)[:300]}
@@ -393,3 +444,107 @@ async def _remove_from_cart(args: dict, ctx: CustomerContext, client: DropMtaani
         return {"error": "cart row not found — call get_cart first"}
     await client.cart_remove(client.with_module(ctx, module_id), int(args["cart_id"]), int(args["store_id"]))
     return {"removed": int(args["cart_id"])}
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Straight-line km, the same server-side distance the checkout quote uses."""
+    from math import asin, cos, radians, sin, sqrt
+
+    dlat, dlng = radians(lat2 - lat1), radians(lng2 - lng1)
+    h = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return 6378.137 * 2 * asin(sqrt(h))
+
+
+async def _place_order(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
+    """One store bucket through checkout. Guests cannot order; the quoted
+    subtotal must still match or the call is refused (stale-cart guard)."""
+    if not ctx.customer_token:
+        return {"error": "ordering needs a logged-in customer"}
+    order_type = args.get("order_type")
+    if order_type not in ("delivery", "take_away"):
+        return {"error": "order_type must be delivery or take_away"}
+    if args.get("payment_method") not in ("cash_on_delivery", "digital_payment", "wallet"):
+        return {"error": "pick a payment method first: cash_on_delivery, digital_payment or wallet"}
+    if args.get("confirm_total") is None:
+        return {"error": "pass the exact quoted subtotal as confirm_total"}
+
+    store_id = int(args["store_id"])
+    found = await _cart_in_modules(store_id, ctx, client)
+    if not found:
+        return {"error": "that store's cart bucket is empty"}
+    module, cart = found[0]
+    subtotal = round(sum(float(r.get("price") or 0) * int(r.get("quantity") or 0) for r in cart["items"]), 2)
+    if abs(subtotal - float(args["confirm_total"])) > 0.01:
+        return {"error": f"cart changed since the recap (now {subtotal}) — show the cart again first"}
+
+    payload: dict = {
+        "store_id": store_id,
+        "order_type": order_type,
+        "payment_method": args["payment_method"],
+        "coupon_code": args.get("coupon_code"),
+    }
+    if order_type == "delivery":
+        try:
+            addresses = _rows(await client.address_list(ctx), "addresses", "data")
+        except DropMtaaniError:
+            return {"error": "could not read saved addresses"}
+        address = next((a for a in addresses if isinstance(a, dict) and a.get("id") == args.get("address_id")), None)
+        if address is None:
+            return {"error": "unknown address — call get_addresses first"}
+        try:
+            store = await client.store_details(ctx, store_id)
+        except DropMtaaniError:
+            return {"error": "could not read the store"}
+        try:
+            distance = _haversine_km(
+                float(store.get("latitude")), float(store.get("longitude")),
+                float(address.get("latitude")), float(address.get("longitude")),
+            )
+        except (TypeError, ValueError):
+            return {"error": "that address has no usable map pin"}
+        payload.update({
+            "address": address.get("address"),
+            "latitude": address.get("latitude"),
+            "longitude": address.get("longitude"),
+            "distance": round(distance, 3),
+        })
+    else:
+        if ctx.latitude is None or ctx.longitude is None:
+            return {"error": "take-away still needs the customer location"}
+        payload.update({"latitude": ctx.latitude, "longitude": ctx.longitude})
+
+    try:
+        body = await client.order_place(client.with_module(ctx, module["id"]), payload)
+    except DropMtaaniError as exc:
+        return {"error": str(exc)[:300]}
+    if not body.get("order_id"):
+        errors = body.get("errors") or []
+        detail = errors[0].get("message") if errors and isinstance(errors[0], dict) else "checkout failed"
+        return {"error": f"the store declined the order: {detail}"}
+    return {"order": {
+        "id": body.get("order_id"),
+        "total": body.get("total_ammount"),
+        "status": body.get("status"),
+    }}
+
+
+async def _get_orders(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
+    if args.get("order_id") is not None:
+        try:
+            body = await client.order_track(ctx, int(args["order_id"]), args.get("contact_number"))
+        except DropMtaaniError:
+            return {"error": "order not found on this account"}
+        order = _pick(body, ["id", "order_status", "payment_status", "payment_method", "order_amount"])
+        detail = body.get("delivery_address")
+        if isinstance(detail, dict) and detail.get("address"):
+            order["deliver_to"] = detail["address"]
+        rider = body.get("delivery_man")
+        if isinstance(rider, dict):
+            order["rider"] = " ".join(str(rider.get(k) or "") for k in ("f_name", "l_name")).strip()
+        return {"order": order}
+    body = await client.order_list(ctx)
+    return {"orders": [
+        _pick(r, ["id", "order_status", "payment_status", "order_amount"])
+        for r in _rows(body, "orders", "data")[:MAX_ROWS]
+        if isinstance(r, dict)
+    ]}

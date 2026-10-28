@@ -108,6 +108,32 @@ class DropMtaaniClient:
     async def item_details(self, ctx: CustomerContext, item_id: int) -> dict:
         return await self._request("GET", f"api/v1/items/details/{item_id}", ctx)
 
+    async def store_details(self, ctx: CustomerContext, store_id: int) -> dict:
+        return await self._request("GET", f"api/v1/stores/details/{store_id}", ctx)
+
+    async def address_list(self, ctx: CustomerContext) -> dict:
+        return await self._request("GET", "api/v1/customer/address/list", ctx)
+
+    async def order_place(self, ctx: CustomerContext, payload: dict) -> dict:
+        return await self._request(
+            "POST", "api/v1/customer/order/place", ctx,
+            json={**payload, **self._guest(ctx)},
+        )
+
+    async def order_list(self, ctx: CustomerContext, limit: int = 5) -> dict:
+        return await self._request(
+            "GET", "api/v1/customer/order/list", ctx,
+            params={"limit": limit, "offset": 1, **self._guest(ctx)},
+        )
+
+    async def order_track(
+        self, ctx: CustomerContext, order_id: int, contact_number: str | None = None,
+    ) -> dict:
+        params: dict = {"order_id": order_id, **self._guest(ctx)}
+        if contact_number:
+            params["contact_number"] = contact_number
+        return await self._request("GET", "api/v1/customer/order/track", ctx, params=params)
+
     # -- cart -----------------------------------------------------------------
 
     async def cart_list(self, ctx: CustomerContext, store_id: int) -> dict:

@@ -205,6 +205,103 @@ def test_unknown_tool_is_error_dict_not_exception():
     assert result == {"error": "unknown tool: nope"}
 
 
+def test_place_order_delivery_flow():
+    posts = []
+    ctx = CustomerContext(customer_token="cust-1", module_id=4, zone_ids=[2])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/v1/module":
+            return httpx.Response(200, json=MODULES)
+        if path.endswith("/cart/list"):
+            if request.headers["moduleId"] == "6":
+                return httpx.Response(200, json={"carts": [{"id": 1, "item_id": 5, "name": "Unga", "quantity": 2, "price": 250}], "total": 500})
+            return httpx.Response(200, json={"carts": []})
+        if path == "/api/v1/customer/address/list":
+            return httpx.Response(200, json={"addresses": [{"id": 3, "address_type": "Home", "address": "M 1", "latitude": "-0.53", "longitude": "37.65"}]})
+        if path == "/api/v1/stores/details/7":
+            return httpx.Response(200, json={"id": 7, "latitude": "-0.53", "longitude": "37.64"})
+        if path == "/api/v1/customer/order/place":
+            posts.append((request.headers["moduleId"], json.loads(request.content)))
+            return httpx.Response(200, json={"order_id": 100, "total_ammount": 540, "status": "pending"})
+        raise AssertionError(f"unexpected {path}")
+
+    result = asyncio.run(execute_tool("place_order", {
+        "store_id": 7, "order_type": "delivery", "address_id": 3,
+        "payment_method": "digital_payment", "confirm_total": 500, "coupon_code": None,
+    }, ctx, make_client(handler)))
+    assert result == {"order": {"id": 100, "total": 540, "status": "pending"}}
+    assert posts[0][0] == "6"
+    assert posts[0][1]["store_id"] == 7
+    assert posts[0][1]["distance"] > 0
+    assert posts[0][1]["address"] == "M 1"
+
+
+def test_place_order_refuses_stale_total():
+    placed = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/v1/module":
+            return httpx.Response(200, json=MODULES)
+        if path.endswith("/cart/list"):
+            return httpx.Response(200, json={"carts": [{"id": 1, "name": "U", "quantity": 1, "price": 100}]})
+        if path == "/api/v1/customer/order/place":
+            placed.append(True)
+        return httpx.Response(200, json={"carts": []})
+
+    ctx = CustomerContext(customer_token="cust-1", module_id=4, zone_ids=[2])
+    result = asyncio.run(execute_tool("place_order", {
+        "store_id": 7, "order_type": "delivery", "address_id": 3,
+        "payment_method": "digital_payment", "confirm_total": 1,
+    }, ctx, make_client(handler)))
+    assert "changed" in result["error"]
+    assert placed == []
+
+
+def test_place_order_guests_cannot():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("no HTTP should happen")
+
+    result = asyncio.run(execute_tool("place_order", {
+        "store_id": 7, "order_type": "delivery", "address_id": 3,
+        "payment_method": "digital_payment", "confirm_total": 1,
+    }, CTX, make_client(handler)))
+    assert "logged-in" in result["error"]
+
+
+def test_get_orders_list_and_track():
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/v1/customer/order/list":
+            return httpx.Response(200, json={"orders": [{"id": 55, "order_status": "handover", "payment_status": "paid", "order_amount": 540}]})
+        if path == "/api/v1/customer/order/track":
+            assert request.url.params["order_id"] == "55"
+            return httpx.Response(200, json={
+                "id": 55, "order_status": "handover", "payment_status": "paid",
+                "payment_method": "digital_payment", "order_amount": 540,
+                "delivery_address": {"address": "M 1"},
+                "delivery_man": {"f_name": "J", "l_name": "K"},
+            })
+        raise AssertionError(f"unexpected {path}")
+
+    ctx = CustomerContext(customer_token="cust-1", module_id=4, zone_ids=[2])
+    listed = asyncio.run(execute_tool("get_orders", {}, ctx, make_client(handler)))
+    assert listed == {"orders": [{"id": 55, "order_status": "handover", "payment_status": "paid", "order_amount": 540}]}
+    tracked = asyncio.run(execute_tool("get_orders", {"order_id": 55}, ctx, make_client(handler)))
+    assert tracked["order"]["rider"] == "J K"
+    assert tracked["order"]["deliver_to"] == "M 1"
+
+
+def test_get_addresses():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"addresses": [{"id": 3, "address_type": "Home", "address": "M 1"}]})
+
+    ctx = CustomerContext(customer_token="cust-1", module_id=4, zone_ids=[2])
+    result = asyncio.run(execute_tool("get_addresses", {}, ctx, make_client(handler)))
+    assert result == {"addresses": [{"id": 3, "address_type": "Home", "address": "M 1"}]}
+
+
 def test_api_error_becomes_error_dict():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={"errors": []})

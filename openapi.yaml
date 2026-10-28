@@ -161,6 +161,75 @@ paths:
       responses:
         '200': { description: Updated cart }
 
+  /api/v1/customer/address/list:
+    get:
+      summary: Saved delivery addresses
+      responses:
+        '200': { description: Address list }
+
+  /api/v1/stores/details/{id}:
+    get:
+      summary: One store (coordinates for delivery distance)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Store }
+
+  /api/v1/customer/order/place:
+    post:
+      summary: Place one store bucket as an order
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [store_id, order_type, payment_method]
+              properties:
+                store_id: { type: integer }
+                order_type: { type: string, enum: [delivery, take_away] }
+                payment_method: { type: string, enum: [cash_on_delivery, digital_payment, wallet] }
+                address: { type: string }
+                latitude: { type: number }
+                longitude: { type: number }
+                distance: { type: number }
+                coupon_code: { type: string }
+                guest_id: { type: string }
+      responses:
+        '200': { description: Order receipt with order_id }
+
+  /api/v1/customer/order/list:
+    get:
+      summary: Recent orders
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: offset
+          in: query
+          schema: { type: integer }
+      responses:
+        '200': { description: Order list }
+
+  /api/v1/customer/order/track:
+    get:
+      summary: One order's tracking detail
+      parameters:
+        - name: order_id
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: contact_number
+          in: query
+          schema: { type: string }
+      responses:
+        '200': { description: Order with status }
+
   /api/v1/customer/cart/remove-item:
     delete:
       summary: Remove one cart row
