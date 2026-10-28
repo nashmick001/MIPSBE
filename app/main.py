@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from app.agent.loop import run_turn
 from app.agent.meta import MetaClient
 from app.config import load_settings, require_provider_settings
+from app.demo_links import store as demo_store
 from app.tools.dropmtaani import CustomerContext, DropMtaaniClient
 
 log = logging.getLogger("dropmtaani-agent")
@@ -30,6 +31,11 @@ async def lifespan(_app: FastAPI):
         log.info("provider settings present")
     except RuntimeError as exc:
         log.warning("starting without provider credentials: %s", exc)
+    seed = os.environ.get("DEMO_MAGIC_SEED", "")
+    if seed and ":" in seed:
+        email, _, persona = seed.partition(":")
+        demo_store.mint(email.strip(), persona.strip() or None)
+        log.info("seeded a sample demo link for %s", email.strip())
     yield
 
 
@@ -95,6 +101,31 @@ class ChatResponse(BaseModel):
     reply: str
     trace: list[dict]
     history: list[ChatTurn]
+
+
+class DemoMagicRequest(BaseModel):
+    # No min_length: any token-shaped value gets a 403 verdict from verify(),
+    # mirroring the panel (the storefront bounces home on a 422).
+    token: str = Field(max_length=200)
+
+
+class DemoMagicResponse(BaseModel):
+    token: str
+    is_demo: bool = True
+    login_type: str = "demo"
+    email: str
+
+
+@app.post("/v1/auth/demo-magic", response_model=DemoMagicResponse)
+def demo_magic(body: DemoMagicRequest, request: Request) -> dict:
+    """Sample of POST /api/v1/auth/demo-magic on the panel: a judge link
+    token trades for a demo session. Wrong in any way is a 403, never a 422,
+    so the storefront shows the error instead of bouncing home."""
+    check_rate(caller_key(request))
+    link = demo_store.verify(body.token)
+    if link is None:
+        raise HTTPException(status_code=403, detail="That demo link is invalid, expired or revoked.")
+    return {"token": f"sample-session-{link.id}", "email": link.email}
 
 
 def build_clients() -> tuple[MetaClient, DropMtaaniClient]:

@@ -52,7 +52,13 @@ language gate refusing users.
 
 ## Demo
 
-Demo accounts and magic links: TBD (judge-testing setup in progress).
+Demo accounts (`is_demo`) browse, chat and place sandboxed demo orders;
+profile/address/money/review writes answer 403. Judges sign in with a
+one-click magic link (`/demo-login?token=...` on the storefront), minted per
+persona and expiring when community voting closes. Sample of the exchange:
+`POST /v1/auth/demo-magic` (`app/demo_links.py`, seeded via
+`DEMO_MAGIC_SEED=email:persona`); the panel original is
+`POST /api/v1/auth/demo-magic` plus the `agent:demo-link` command.
 
 Try these (planned):
 
