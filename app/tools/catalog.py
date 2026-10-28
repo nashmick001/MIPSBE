@@ -15,6 +15,30 @@ from typing import Any
 from app.tools.dropmtaani import CustomerContext, DropMtaaniClient, DropMtaaniError
 
 MAX_ROWS = 8
+PER_MODULE_ROWS = 3
+
+# Module types with searchable product catalogs. Parcel, rental, ride-share
+# and service have no item search, so fan-out skips them.
+SHOPPING_TYPES = {"food", "grocery", "pharmacy", "ecommerce"}
+
+
+async def _shopping_modules(ctx: CustomerContext, client: DropMtaaniClient) -> list:
+    """Active shopping modules, or the caller's module alone as fallback."""
+    try:
+        body = await client.modules(ctx)
+        rows = _rows(body, "modules", "data")
+        found = [
+            {"id": r["id"], "name": r.get("module_name") or r.get("name") or str(r["id"])}
+            for r in rows
+            if isinstance(r, dict) and r.get("id") and r.get("module_type") in SHOPPING_TYPES
+        ]
+        if found:
+            return found
+    except DropMtaaniError:
+        pass
+    if ctx.module_id:
+        return [{"id": ctx.module_id, "name": "current section"}]
+    return []
 
 
 def _rows(body: dict, *keys: str) -> list:
@@ -55,8 +79,16 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "get_modules",
+            "description": "Shopping sections (Food, Grocery, Pharmacy, SHOP). Call once when unsure where to look.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_products",
-            "description": "Search the product catalog by name. Returns matching items with ids, prices and stores.",
+            "description": "Search products by name across ALL shopping sections. Every item says which section it is from.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -68,7 +100,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_stores",
-            "description": "Search stores by name.",
+            "description": "Search stores by name across ALL shopping sections.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -119,7 +151,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_cart",
-            "description": "Current cart contents and total for one store.",
+            "description": "Current cart for one store, from whichever section it lives in.",
             "parameters": {
                 "type": "object",
                 "properties": {"store_id": {"type": "integer"}},
@@ -131,7 +163,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "add_to_cart",
-            "description": "Add an item to the cart. Price and store are read from the server, never from the request.",
+            "description": "Add an item to its own section's cart, wherever the customer is chatting from. Price and store are read from the server, never from the request.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -179,48 +211,102 @@ TOOL_SCHEMAS: list[dict] = [
 async def execute_tool(name: str, args: dict[str, Any], ctx: CustomerContext, client: DropMtaaniClient) -> dict:
     """Run one tool call. Always returns a JSON-able dict, errors included."""
     try:
+        if name == "get_modules":
+            return {"modules": await _shopping_modules(ctx, client)}
         if name == "search_products":
-            body = await client.search_products(ctx, args["query"])
-            return {"items": _trim_products(_rows(body, "products")), "total": body.get("total_size")}
+            return await _search_all("products", args["query"], ctx, client)
         if name == "search_stores":
-            body = await client.search_stores(ctx, args["query"])
-            return {"stores": [_pick(r, ["id", "name"]) for r in _rows(body, "stores")[:MAX_ROWS]]}
+            return await _search_all("stores", args["query"], ctx, client)
         if name == "get_categories":
             body = await client.categories(ctx, args.get("search"))
-            return {"categories": [_pick(r, ["id", "name"]) for r in _rows(body, "categories")[:MAX_ROWS]]}
+            return {"categories": [_pick(r, ["id", "name"]) for r in _rows(body, "categories", "data")[:MAX_ROWS]]}
         if name == "get_popular":
             body = await client.popular_items(ctx)
-            return {"items": _trim_products(_rows(body, "products"))}
+            return {"items": _trim_products(_rows(body, "products", "data"))}
         if name == "get_deals":
             body = await client.discounted_items(ctx)
-            return {"items": _trim_products(_rows(body, "products"))}
+            return {"items": _trim_products(_rows(body, "products", "data"))}
         if name == "get_item":
-            body = await client.item_details(ctx, int(args["item_id"]))
-            item = body.get("product") if isinstance(body.get("product"), dict) else body
+            item, _ = await _details_any_module(int(args["item_id"]), ctx, client)
+            if not item.get("id"):
+                return {"error": "item not found in any section"}
             out = _pick(item, ["id", "name", "price", "store_id", "store_name", "variations"])
             out["model"] = "ItemCampaign" if item.get("campaign") else "Item"
             return {"item": out}
         if name == "get_cart":
-            return _trim_cart(await client.cart_list(ctx, int(args["store_id"])))
+            return await _get_cart_anywhere(args, ctx, client)
         if name == "add_to_cart":
             return await _add_to_cart(args, ctx, client)
         if name == "update_cart":
             return await _update_cart(args, ctx, client)
         if name == "remove_from_cart":
-            await client.cart_remove(ctx, int(args["cart_id"]), int(args["store_id"]))
-            return {"removed": int(args["cart_id"])}
+            return await _remove_from_cart(args, ctx, client)
         return {"error": f"unknown tool: {name}"}
     except (DropMtaaniError, KeyError, ValueError, TypeError) as exc:
         return {"error": str(exc)[:300]}
 
 
+async def _search_all(kind: str, query: str, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
+    """Search every shopping section; tag each hit with its section name."""
+    out: list = []
+    for module in await _shopping_modules(ctx, client):
+        mctx = client.with_module(ctx, module["id"])
+        try:
+            body = await client.search_products(mctx, query) if kind == "products" else await client.search_stores(mctx, query)
+        except DropMtaaniError:
+            continue
+        rows = _rows(body, "products", "stores", "data")[:PER_MODULE_ROWS]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            hit = _pick(row, ["id", "name", "price", "discount", "store_id", "store_name", "image_full_url"])
+            hit["module"] = module["name"]
+            out.append(hit)
+    key = "items" if kind == "products" else "stores"
+    return {key: out}
+
+
+async def _details_any_module(item_id: int, ctx: CustomerContext, client: DropMtaaniClient) -> tuple:
+    """Item details + the module that answered (details are module-scoped)."""
+    for module in await _shopping_modules(ctx, client):
+        try:
+            body = await client.item_details(client.with_module(ctx, module["id"]), item_id)
+        except DropMtaaniError:
+            continue
+        item = body.get("product") if isinstance(body.get("product"), dict) else body
+        if item.get("id"):
+            return item, int(item.get("module_id") or module["id"])
+    return {}, 0
+
+
+async def _cart_in_modules(store_id: int, ctx: CustomerContext, client: DropMtaaniClient) -> list:
+    """This store's cart rows from every section that has any: [(module, cart)]."""
+    found = []
+    for module in await _shopping_modules(ctx, client):
+        try:
+            cart = _trim_cart(await client.cart_list(client.with_module(ctx, module["id"]), store_id))
+        except DropMtaaniError:
+            continue
+        if cart["items"]:
+            found.append((module, cart))
+    return found
+
+
+async def _get_cart_anywhere(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
+    carts = [
+        {"module": module["name"], "items": cart["items"], "total": cart["total"]}
+        for module, cart in await _cart_in_modules(int(args["store_id"]), ctx, client)
+    ]
+    return {"carts": carts}
+
+
 async def _add_to_cart(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
-    details = await client.item_details(ctx, int(args["item_id"]))
-    item = details.get("product") if isinstance(details.get("product"), dict) else details
+    item, module_id = await _details_any_module(int(args["item_id"]), ctx, client)
     if not item.get("id"):
-        return {"error": "item not found"}
+        return {"error": "item not found in any section"}
+    mctx = client.with_module(ctx, module_id)
     await client.cart_add(
-        ctx,
+        mctx,
         item_id=int(item["id"]),
         model="ItemCampaign" if item.get("campaign") else "Item",
         price=float(item["price"]),
@@ -230,19 +316,35 @@ async def _add_to_cart(args: dict, ctx: CustomerContext, client: DropMtaaniClien
     return {"added": {"item_id": item["id"], "name": item.get("name"), "quantity": int(args["quantity"])}}
 
 
+async def _find_cart_row(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> tuple:
+    """Locate a cart row across sections: (module_id, row) or (0, None)."""
+    for module, cart in await _cart_in_modules(int(args["store_id"]), ctx, client):
+        row = next(
+            (r for r in cart["items"] if r.get("id") == args["cart_id"] or r.get("cart_id") == args["cart_id"]),
+            None,
+        )
+        if row is not None:
+            return module["id"], row
+    return 0, None
+
+
 async def _update_cart(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
-    cart = _trim_cart(await client.cart_list(ctx, int(args["store_id"])))
-    row = next(
-        (r for r in cart["items"] if r.get("id") == args["cart_id"] or r.get("cart_id") == args["cart_id"]),
-        None,
-    )
+    module_id, row = await _find_cart_row(args, ctx, client)
     if row is None:
         return {"error": "cart row not found — call get_cart first"}
     await client.cart_update(
-        ctx,
+        client.with_module(ctx, module_id),
         cart_id=int(args["cart_id"]),
         price=float(row["price"]),
         quantity=max(1, int(args["quantity"])),
         store_id=int(args["store_id"]),
     )
     return {"updated": {"cart_id": args["cart_id"], "quantity": int(args["quantity"])}}
+
+
+async def _remove_from_cart(args: dict, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
+    module_id, row = await _find_cart_row(args, ctx, client)
+    if row is None:
+        return {"error": "cart row not found — call get_cart first"}
+    await client.cart_remove(client.with_module(ctx, module_id), int(args["cart_id"]), int(args["store_id"]))
+    return {"removed": int(args["cart_id"])}

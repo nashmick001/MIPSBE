@@ -40,7 +40,10 @@ def test_tool_round_then_reply(monkeypatch):
     meta = FakeMeta([tool_call("search_products", {"query": "unga"}), {"content": "Found unga."}])
     out = asyncio.run(run_turn("nataka unga", [], CustomerContext(), meta, object()))
     assert out["reply"] == "Found unga."
-    assert out["trace"] == [{"tool": "search_products", "args": {"query": "unga"}, "ok": True}]
+    assert out["trace"] == [
+        {"tool": "search_products", "args": {"query": "unga"}, "ok": True,
+         "result": {"items": [{"id": 1, "name": "Unga"}]}}
+    ]
     assert [t["role"] for t in out["history"]] == ["user", "assistant"]
     assert meta.calls == 2
 

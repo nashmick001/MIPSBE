@@ -60,7 +60,7 @@ async def run_turn(
                 except json.JSONDecodeError:
                     args = {}
                 result = await execute_tool(name, args, ctx, client)
-                trace.append({"tool": name, "args": args, "ok": "error" not in result})
+                trace.append({"tool": name, "args": args, "ok": "error" not in result, "result": result})
                 messages.append(
                     {"role": "tool", "tool_call_id": call.get("id"), "content": json.dumps(result)}
                 )

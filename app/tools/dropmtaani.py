@@ -7,7 +7,7 @@ this file carries the shared plumbing (auth headers, timeouts, errors).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import httpx
 
@@ -42,8 +42,13 @@ class DropMtaaniClient:
         self._transport = transport
 
     def _headers(self, ctx: CustomerContext) -> dict:
-        token = ctx.customer_token or self._service_token
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        headers = {"Accept": "application/json"}
+        if self._service_token:
+            headers["Authorization"] = f"Bearer {self._service_token}"
+            if ctx.customer_token:
+                headers["X-Customer-Token"] = ctx.customer_token
+        elif ctx.customer_token:
+            headers["Authorization"] = f"Bearer {ctx.customer_token}"
         if ctx.module_id:
             headers["moduleId"] = str(ctx.module_id)
         if ctx.zone_ids:
@@ -72,6 +77,14 @@ class DropMtaaniClient:
         return {"guest_id": ctx.guest_id}
 
     # -- catalog (paths per openapi.yaml) ------------------------------------
+
+    def with_module(self, ctx: CustomerContext, module_id: int) -> CustomerContext:
+        """Copy of ctx pinned to one module (cross-module fan-out)."""
+        return replace(ctx, module_id=module_id)
+
+    async def modules(self, ctx: CustomerContext) -> dict:
+        params = {"zone_id": ctx.zone_ids[0]} if ctx.zone_ids else {}
+        return await self._request("GET", "api/v1/module", ctx, params=params)
 
     async def search_products(self, ctx: CustomerContext, name: str) -> dict:
         return await self._request("GET", "api/v1/items/search", ctx, params={"name": name})
