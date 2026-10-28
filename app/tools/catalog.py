@@ -88,7 +88,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_products",
-            "description": "Search products by name across ALL shopping sections. Every item says which section it is from.",
+            "description": "Search products across ALL shopping sections. Resolves the query against category names first, then item names. Category hits carry a match tag naming the category.",
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -247,23 +247,68 @@ async def execute_tool(name: str, args: dict[str, Any], ctx: CustomerContext, cl
 
 
 async def _search_all(kind: str, query: str, ctx: CustomerContext, client: DropMtaaniClient) -> dict:
-    """Search every shopping section; tag each hit with its section name."""
+    """Search every shopping section; tag each hit with its section name.
+
+    Products resolve the full query against category names first (a query
+    naming a category is stronger intent than a substring hit on an
+    unrelated item); only sections with no category match fall back to a
+    name search. Category hits carry a match tag naming the category.
+    """
     out: list = []
+    categories: list = []
     for module in await _shopping_modules(ctx, client):
         mctx = client.with_module(ctx, module["id"])
-        try:
-            body = await client.search_products(mctx, query) if kind == "products" else await client.search_stores(mctx, query)
-        except DropMtaaniError:
-            continue
-        rows = _rows(body, "products", "stores", "data")[:PER_MODULE_ROWS]
+        match_tag = ""
+        if kind == "products":
+            try:
+                found = _match_categories(await client.categories(mctx, query), query)
+            except DropMtaaniError:
+                found = []
+            if found:
+                categories.extend({**c, "module": module["name"]} for c in found)
+                match_tag = f"category \"{found[0]['name']}\""
+                try:
+                    body = await client.category_items(mctx, int(found[0]["id"]))
+                except DropMtaaniError:
+                    continue
+                rows = _rows(body, "products", "data")[:PER_MODULE_ROWS]
+            else:
+                try:
+                    body = await client.search_products(mctx, query)
+                except DropMtaaniError:
+                    continue
+                rows = _rows(body, "products", "data")[:PER_MODULE_ROWS]
+        else:
+            try:
+                body = await client.search_stores(mctx, query)
+            except DropMtaaniError:
+                continue
+            rows = _rows(body, "stores", "data")[:PER_MODULE_ROWS]
         for row in rows:
             if not isinstance(row, dict):
                 continue
             hit = _pick(row, ["id", "name", "price", "discount", "store_id", "store_name", "image_full_url"])
             hit["module"] = module["name"]
+            if match_tag:
+                hit["match"] = match_tag
             out.append(hit)
     key = "items" if kind == "products" else "stores"
-    return {key: out}
+    result: dict = {key: out}
+    if categories:
+        result["categories"] = categories
+    return result
+
+
+def _match_categories(body: dict, query: str) -> list:
+    """Categories whose name contains the full query (mirrors the LIKE)."""
+    needle = query.strip().lower()
+    if not needle:
+        return []
+    return [
+        _pick(r, ["id", "name"])
+        for r in _rows(body, "categories", "data")
+        if isinstance(r, dict) and r.get("id") and needle in str(r.get("name") or "").lower()
+    ]
 
 
 async def _details_any_module(item_id: int, ctx: CustomerContext, client: DropMtaaniClient) -> tuple:

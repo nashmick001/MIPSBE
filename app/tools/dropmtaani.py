@@ -96,6 +96,9 @@ class DropMtaaniClient:
         params = {"search": search} if search else {}
         return await self._request("GET", "api/v1/categories/", ctx, params=params)
 
+    async def category_items(self, ctx: CustomerContext, category_id: int) -> dict:
+        return await self._request("GET", f"api/v1/categories/items/{category_id}", ctx)
+
     async def popular_items(self, ctx: CustomerContext) -> dict:
         return await self._request("GET", "api/v1/items/popular", ctx)
 

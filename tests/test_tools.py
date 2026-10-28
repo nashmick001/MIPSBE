@@ -39,7 +39,8 @@ def test_search_fans_out_and_tags_sections():
     seen_modules = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen_modules.append(request.headers["moduleId"])
+        if request.url.path.endswith("/items/search"):
+            seen_modules.append(request.headers["moduleId"])
         mid = request.headers["moduleId"]
         return httpx.Response(200, json={
             "products": [{"id": int(mid), "name": f"item{mid}", "price": 10}],
@@ -49,6 +50,30 @@ def test_search_fans_out_and_tags_sections():
     result = asyncio.run(execute_tool("search_products", {"query": "unga"}, CTX, make_client(module_router(handler))))
     assert seen_modules == ["4", "6"]
     assert [(i["id"], i["module"]) for i in result["items"]] == [(4, "Food"), (6, "SHOP")]
+
+
+def test_search_prefers_category_and_tags_it():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        mid = request.headers.get("moduleId")
+        calls.append((path, mid))
+        if path == "/api/v1/categories/":
+            if mid == "6":
+                return httpx.Response(200, json={"categories": [{"id": 352, "name": "Vapes"}]})
+            return httpx.Response(200, json={"categories": []})
+        if path == "/api/v1/categories/items/352":
+            return httpx.Response(200, json={"products": [{"id": 1, "name": "Happy Bar", "price": 500}]})
+        return httpx.Response(200, json={"products": [{"id": 9, "name": "Fumakilla Vape Mat", "price": 100}]})
+
+    result = asyncio.run(execute_tool("search_products", {"query": "vape"}, CTX, make_client(module_router(handler))))
+    assert result["categories"] == [{"id": 352, "name": "Vapes", "module": "SHOP"}]
+    by_module = {i["module"]: i for i in result["items"]}
+    assert by_module["SHOP"]["match"] == 'category "Vapes"'
+    assert by_module["SHOP"]["id"] == 1
+    assert "match" not in by_module["Food"]
+    assert ("/api/v1/items/search", "6") not in calls
 
 
 def test_search_caps_three_per_module():
@@ -97,7 +122,8 @@ def test_search_falls_back_to_caller_module():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/v1/module":
             return httpx.Response(500, json={})
-        seen.append(request.headers["moduleId"])
+        if request.url.path.endswith("/items/search"):
+            seen.append(request.headers["moduleId"])
         return httpx.Response(200, json={"products": [], "total_size": 0})
 
     result = asyncio.run(execute_tool("search_products", {"query": "x"}, CTX, make_client(handler)))

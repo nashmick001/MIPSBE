@@ -13,6 +13,16 @@ security:
   - bearerAuth: []
 
 paths:
+  /api/v1/module:
+    get:
+      summary: Active modules for a zone (agent keeps food/grocery/pharmacy/ecommerce)
+      parameters:
+        - name: zone_id
+          in: query
+          schema: { type: integer }
+      responses:
+        '200': { description: Module list }
+
   /api/v1/items/search:
     get:
       summary: Search products by name
@@ -79,6 +89,18 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Category list }
+
+  /api/v1/categories/items/{category_id}:
+    get:
+      summary: Items in one category (category-first search resolution)
+      parameters:
+        - $ref: '#/components/parameters/ModuleId'
+        - name: category_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Category items }
 
   /api/v1/customer/cart/list:
     get:
