@@ -20,6 +20,9 @@ def test_mint_verify_roundtrip():
     assert link.is_live()
     assert store.verify(plain) is link
     assert link.last_used_at is not None
+    assert link.use_count == 1
+    store.verify(plain)
+    assert link.use_count == 2
 
 
 def test_plaintext_never_stored():

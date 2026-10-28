@@ -120,7 +120,9 @@ class DemoMagicResponse(BaseModel):
 def demo_magic(body: DemoMagicRequest, request: Request) -> dict:
     """Sample of POST /api/v1/auth/demo-magic on the panel: a judge link
     token trades for a demo session. Wrong in any way is a 403, never a 422,
-    so the storefront shows the error instead of bouncing home."""
+    so the storefront shows the error instead of bouncing home. On the panel
+    the Passport session is capped to die with the link, and revoking ends
+    open sessions too (the sample keeps no sessions)."""
     check_rate(caller_key(request))
     link = demo_store.verify(body.token)
     if link is None:

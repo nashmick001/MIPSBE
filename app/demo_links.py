@@ -20,6 +20,7 @@ class DemoLink:
     expires_at: datetime
     revoked_at: datetime | None = None
     last_used_at: datetime | None = None
+    use_count: int = 0
 
     def is_live(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(timezone.utc)
@@ -58,6 +59,7 @@ class DemoLinkStore:
         for link in self.links.values():
             if link.token_hash == want and link.is_live(now):
                 link.last_used_at = now or datetime.now(timezone.utc)
+                link.use_count += 1
                 return link
         return None
 
