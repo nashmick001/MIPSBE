@@ -51,6 +51,19 @@ if _origins:
 # In-memory and per process: fine for one worker; use a shared store if this ever runs on several.
 RATE_LIMIT = int(os.environ.get("AGENT_RATE_PER_MINUTE", "12") or 12)
 MAX_AUDIO_BYTES = 5 * 1024 * 1024
+MAX_PHOTO_BYTES = 4 * 1024 * 1024
+PHOTO_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+NOTHING_VISIBLE = "NO_FOOD_VISIBLE"
+
+PHOTO_READ_PROMPT = (
+    "This photo is the customer's shopping list or the inside of their fridge. "
+    "Read it carefully and reply ONLY with lines in this shape, one item per line: "
+    '"- name — qty/notes". Rules: transcribe list entries verbatim (brand + size when '
+    "shown); for a fridge, name each visible food item and obvious empties "
+    '("milk — nearly empty"); mark anything illegible as "unclear — <best guess?>" '
+    "instead of inventing; ignore non-food clutter; no chatter, no headers, just the lines. "
+    "If no food or list is visible at all, reply exactly: NO_FOOD_VISIBLE"
+)
 _hits: dict[str, deque] = defaultdict(deque)
 
 
@@ -101,6 +114,69 @@ class ChatResponse(BaseModel):
     reply: str
     trace: list[dict]
     history: list[ChatTurn]
+
+
+class PhotoReadResponse(BaseModel):
+    items_text: str
+    visible: bool
+
+
+class PhotoReadError(RuntimeError):
+    """The vision backend refused or failed the photo."""
+
+
+async def read_photo(settings, content: bytes, content_type: str, client: httpx.AsyncClient) -> str:
+    """Read a shopping list / fridge photo with Muse vision. Verified live:
+    image_url part on chat/completions, reasoning low, 2000-token budget."""
+    import base64
+
+    data_url = "data:" + content_type + ";base64," + base64.b64encode(content).decode()
+    response = await client.post(
+        f"{settings.meta_api_base}/chat/completions",
+        headers={"Authorization": f"Bearer {settings.meta_api_key}"},
+        json={
+            "model": settings.vision_model or settings.agent_model,
+            "max_tokens": 2000,
+            "reasoning_effort": "low",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": PHOTO_READ_PROMPT},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]}],
+        },
+    )
+    if response.status_code >= 400:
+        raise PhotoReadError("Vision service refused the photo.")
+    body = response.json()
+    try:
+        return (body["choices"][0]["message"]["content"] or "").strip()
+    except (KeyError, IndexError, TypeError) as exc:
+        raise PhotoReadError("Vision service returned no read.") from exc
+
+
+@app.post("/v1/photo-read", response_model=PhotoReadResponse)
+async def photo_read(request: Request, image: UploadFile = File(...)) -> dict:
+    """Sample of the panel's photo turn: read the list/fridge photo, return
+    item lines the agent turns into an order suggestion."""
+    check_rate(caller_key(request))
+    try:
+        settings = require_provider_settings(load_settings())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if image.content_type not in PHOTO_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="Photo must be JPEG, PNG or WebP.")
+    content = await image.read(MAX_PHOTO_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty photo upload.")
+    if len(content) > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Photo is too large (4 MB max).")
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            text = await read_photo(settings, content, image.content_type or "image/jpeg", client)
+    except PhotoReadError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Vision backend unreachable: {exc}") from exc
+    return {"items_text": text, "visible": text != NOTHING_VISIBLE}
 
 
 class DemoMagicRequest(BaseModel):

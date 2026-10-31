@@ -29,7 +29,8 @@ real DropMtaani API and powers the in-app chat.
 - [x] Reorder predictor (panel `GetReorderSuggestionsTool`): the customer's own most-ordered items, in stock and deliverable now
 - [x] Spend metering (panel `ai_spend_ledger` + `agent:spend`): tokens + frozen cost per turn
 - [x] Cross-chat memory (panel `ConversationMemory`): each turn preloads other recent chats + usuals
-- [x] Website voice notes (mic, live transcribe); photo upload still open
+- [x] Website voice notes (mic, live transcribe)
+- [x] Photo turns (panel `PhotoReadService`, sample `POST /v1/photo-read`): snap a shopping list/fridge, vision reads item lines, agent suggests the order
 - [x] Evals + red-team report (`evals/`, `REDTEAM.md`, 10/10)
 
 ## Pre-existing (NOT hackathon work)
