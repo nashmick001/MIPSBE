@@ -24,11 +24,13 @@ real DropMtaani API and powers the in-app chat.
 - [x] Parity agent: Meta tool-calling loop, 10 shopping tools over the real API (`openapi.yaml`), `POST /v1/chat` with tool trace, server-side prices only
 - [x] Cross-module agent: search/cart span Food/Grocery/Pharmacy/SHOP, results tagged by section, cart writes go to the item's own section
 - [x] Voice notes: `POST /v1/transcribe` (Voice Transcribe, verified live), website mic button with 16kHz WAV conversion
-- [ ] Tool-calling order agent (text + voice, Swahili/Sheng/English)
+- [x] Tool-calling order agent (text + voice, Swahili/Sheng/English)
 - [ ] "What can I cook tonight?" pipeline
-- [ ] "Today's order" predictor
-- [ ] Website chat additions (voice notes + photo upload)
-- [ ] Evals + red-team report
+- [x] Reorder predictor (panel `GetReorderSuggestionsTool`): the customer's own most-ordered items, in stock and deliverable now
+- [x] Spend metering (panel `ai_spend_ledger` + `agent:spend`): tokens + frozen cost per turn
+- [x] Cross-chat memory (panel `ConversationMemory`): each turn preloads other recent chats + usuals
+- [x] Website voice notes (mic, live transcribe); photo upload still open
+- [x] Evals + red-team report (`evals/`, `REDTEAM.md`, 10/10)
 
 ## Pre-existing (NOT hackathon work)
 
